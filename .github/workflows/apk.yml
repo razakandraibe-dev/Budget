@@ -1,0 +1,313 @@
+# Budget familial : ce fichier demande à GitHub de fabriquer l'APK.
+# Il se lance tout seul à chaque fois que tu envoies un nouveau index.html.
+name: Construire l'APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer les fichiers
+        uses: actions/checkout@v4
+
+      - name: Installer Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Installer Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: "Projet - settings.gradle"
+        run: |
+          mkdir -p "$(dirname 'android/settings.gradle')"
+          cat > 'android/settings.gradle' <<'FIN_DU_FICHIER'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "BudgetFamilial"
+          include ':app'
+          FIN_DU_FICHIER
+
+      - name: "Projet - build.gradle"
+        run: |
+          mkdir -p "$(dirname 'android/build.gradle')"
+          cat > 'android/build.gradle' <<'FIN_DU_FICHIER'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          FIN_DU_FICHIER
+
+      - name: "Projet - gradle.properties"
+        run: |
+          mkdir -p "$(dirname 'android/gradle.properties')"
+          cat > 'android/gradle.properties' <<'FIN_DU_FICHIER'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=false
+          FIN_DU_FICHIER
+
+      - name: "Appli - build.gradle"
+        run: |
+          mkdir -p "$(dirname 'android/app/build.gradle')"
+          cat > 'android/app/build.gradle' <<'FIN_DU_FICHIER'
+          plugins {
+              id 'com.android.application'
+          }
+
+          def runNumber = (System.getenv('GITHUB_RUN_NUMBER') ?: '1').toInteger()
+
+          android {
+              namespace 'com.heryzo.budgetfamilial'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId 'com.heryzo.budgetfamilial'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode runNumber
+                  versionName "1." + runNumber
+              }
+
+              signingConfigs {
+                  release {
+                      storeFile file('budget.jks')
+                      storePassword 'budgetfamilial'
+                      keyAlias 'budget'
+                      keyPassword 'budgetfamilial'
+                      storeType 'pkcs12'
+                  }
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                      signingConfig signingConfigs.release
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+
+              lint {
+                  checkReleaseBuilds false
+                  abortOnError false
+              }
+          }
+          FIN_DU_FICHIER
+
+      - name: "Appli - AndroidManifest.xml"
+        run: |
+          mkdir -p "$(dirname 'android/app/src/main/AndroidManifest.xml')"
+          cat > 'android/app/src/main/AndroidManifest.xml' <<'FIN_DU_FICHIER'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:label="Budget familial"
+                  android:icon="@mipmap/ic_launcher"
+                  android:allowBackup="true"
+                  android:theme="@android:style/Theme.Material.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          FIN_DU_FICHIER
+
+      - name: "Appli - MainActivity.java"
+        run: |
+          mkdir -p "$(dirname 'android/app/src/main/java/com/heryzo/budgetfamilial/MainActivity.java')"
+          cat > 'android/app/src/main/java/com/heryzo/budgetfamilial/MainActivity.java' <<'FIN_DU_FICHIER'
+          package com.heryzo.budgetfamilial;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.graphics.Color;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          public class MainActivity extends Activity {
+              private static final int FILE_REQ = 42;
+              private WebView web;
+              private ValueCallback<Uri[]> fileCallback;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  getWindow().setStatusBarColor(Color.parseColor("#0b1f4b"));
+                  web = new WebView(this);
+                  web.setBackgroundColor(Color.parseColor("#0b1f4b"));
+                  WebSettings s = web.getSettings();
+                  s.setJavaScriptEnabled(true);
+                  s.setDomStorageEnabled(true);
+                  s.setDatabaseEnabled(true);
+                  s.setAllowFileAccess(true);
+                  s.setTextZoom(100);
+                  web.setWebViewClient(new WebViewClient() {
+                      @Override
+                      public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                          Uri u = request.getUrl();
+                          if ("file".equals(u.getScheme())) return false;
+                          try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (Exception e) { }
+                          return true;
+                      }
+                  });
+                  web.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
+                          if (fileCallback != null) fileCallback.onReceiveValue(null);
+                          fileCallback = callback;
+                          Intent i = new Intent(Intent.ACTION_GET_CONTENT);
+                          i.addCategory(Intent.CATEGORY_OPENABLE);
+                          i.setType("*/*");
+                          try {
+                              startActivityForResult(Intent.createChooser(i, "Choisir une sauvegarde"), FILE_REQ);
+                          } catch (Exception e) {
+                              fileCallback = null;
+                              return false;
+                          }
+                          return true;
+                      }
+                  });
+                  setContentView(web);
+                  if (savedInstanceState != null) web.restoreState(savedInstanceState);
+                  else web.loadUrl("file:///android_asset/index.html");
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  if (requestCode == FILE_REQ && fileCallback != null) {
+                      Uri[] result = null;
+                      if (resultCode == RESULT_OK && data != null && data.getData() != null) result = new Uri[]{data.getData()};
+                      fileCallback.onReceiveValue(result);
+                      fileCallback = null;
+                      return;
+                  }
+                  super.onActivityResult(requestCode, resultCode, data);
+              }
+
+              @Override
+              protected void onSaveInstanceState(Bundle out) {
+                  super.onSaveInstanceState(out);
+                  web.saveState(out);
+              }
+
+              @Override
+              public void onBackPressed() {
+                  String js = "(function(){var o=document.getElementById('ov');if(o&&o.classList.contains('on')){o.classList.remove('on');document.body.style.overflow='';return 1}return 0})()";
+                  web.evaluateJavascript(js, new ValueCallback<String>() {
+                      @Override
+                      public void onReceiveValue(String v) {
+                          if (!"1".equals(v)) MainActivity.super.onBackPressed();
+                      }
+                  });
+              }
+          }
+          FIN_DU_FICHIER
+
+      - name: Clé de signature (la même à chaque fois, pour les mises à jour)
+        run: |
+          base64 -d > android/app/budget.jks <<'FIN_DE_LA_CLE'
+          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
+          FIN_DE_LA_CLE
+
+      - name: Icône et page de l'appli
+        run: |
+          mkdir -p android/app/src/main/res/mipmap-xxxhdpi android/app/src/main/assets
+          cp icon-192.png android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+          cp index.html android/app/src/main/assets/index.html
+
+      - name: Fabriquer l'APK
+        working-directory: android
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Renommer l'APK
+        run: cp android/app/build/outputs/apk/release/app-release.apk budget-familial.apk
+
+      - name: Garder l'APK dans les résultats
+        uses: actions/upload-artifact@v4
+        with:
+          name: budget-familial-apk
+          path: budget-familial.apk
+
+      - name: Publier l'APK (page Releases)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Budget familial v${{ github.run_number }}
+          body: APK de l'appli Budget familial. Télécharge budget-familial.apk et installe-le.
+          files: budget-familial.apk
+          make_latest: true
